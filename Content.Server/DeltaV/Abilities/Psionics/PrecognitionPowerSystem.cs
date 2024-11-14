@@ -69,25 +69,84 @@ namespace Content.Server.Abilities.Psionics
             args.Handled = true;
         }
 
+        /// <summary>
+        /// Upon completion will send a message to the user corrosponding to the next station event to occour.
+        /// </summary>
+        /// <param name="uid"></param>
+        /// <param name="component"></param>
+        /// <param name="args"></param>
         private void OnDoAfter(EntityUid uid, PrecognitionPowerComponent component, PrecognitionDoAfterEvent args)
         {
+            var minDetectWindow = TimeSpan.FromSeconds(30); // Determines the window that will be looked at for events avoiding events that are too close or too far to be useful.
+            var maxDetectWindow = TimeSpan.FromMinutes(5);
+            string message = string.Empty;
+
+            if (!_mind.TryGetMind(uid, out _, out var mindComponent) || mindComponent.Session == null)
+                return;
+
+            if (!TryFindEarliestNextEvent(minDetectWindow, maxDetectWindow, out var nextEvent)) // A special message given if there is no event within the time window
+                message = "psionic-power-precognition-no-event-result-message";
+
+            if (nextEvent != null && !TryGetResultMessage(nextEvent.NextEventId, out message) || message == string.Empty) // In this case failure to get result message means something has gone wrong
+                return;
+
+            // Send a message describing the vision they see
+            _chat.ChatMessageToOne(Shared.Chat.ChatChannel.Server,
+                    message,
+                    Loc.GetString("chat-manager-server-wrap-message", ("message", message)),
+                    uid,
+                    false,
+                    mindComponent.Session.Channel,
+                    Color.PaleVioletRed);
+
             component.DoAfter = null;
         }
-    private NextEventComponent? FindNextEvent(TimeSpan minDetectWindow, TimeSpan maxDetectWindow)
+
+        /// <summary>
+        /// Sets "message" to the localized message of the precognitionResult that that matches "nextEventId">
+        /// </summary>
+        /// <returns>true if a corosponding precognitionResult was found false otherwise</returns>
+        private bool TryGetResultMessage(EntProtoId nextEventId, out string message)
         {
-            NextEventComponent? earliestNextEvent = null;
+            foreach(var (eventProto, precognitionResult) in AllPrecognitionResults())
+                if (eventProto.ID == nextEventId && precognitionResult != null)
+                {
+                    message = Loc.GetString(precognitionResult.Message);
+                    return true;
+                }
+            message = string.Empty;
+            Log.Warning("Prototype " + nextEventId + "does not have an associated precognitionResult!");
+            return false;
+        }
+
+        /// <summary>
+        /// Gets the soonest nextEvent to occur within the window.
+        /// </summary>
+        /// <param name="minDetectWindow"></param> The earliest reletive time that will be return a nextEvent
+        /// <param name="maxDetectWindow"></param> The latest reletive latest time that will be return a nextEvent
+        /// <param name="earliestNextEvent"></param> the next nextEvent to occur within the window
+        /// <returns></returns>
+        private bool TryFindEarliestNextEvent(TimeSpan minDetectWindow, TimeSpan maxDetectWindow, out NextEventComponent? earliestNextEvent)
+        {
             TimeSpan? earliestNextEventTime = null;
+            earliestNextEvent = null;
             var query = EntityQueryEnumerator<NextEventComponent>();
             while (query.MoveNext(out var uid, out var nextEventComponent))
             {
+                if (!HasComp<PrecognitionResultComponent>(uid)) // ignore if there is no result associated
+                    continue;
                 // Update if the event is the most recent event that isnt too close or too far from happening to be of use
                 if (nextEventComponent.NextEventTime > GameTicker.RoundDuration() + minDetectWindow
                     && nextEventComponent.NextEventTime < GameTicker.RoundDuration() + maxDetectWindow
-                    && nextEventComponent.NextEventTime < earliestNextEventTime)
+                    && earliestNextEvent == null
+                    || nextEventComponent.NextEventTime < earliestNextEventTime)
                     earliestNextEvent ??= nextEventComponent;
             }
-            return earliestNextEvent;
+            if (earliestNextEvent == null)
+                return false;
+            return true;
         }
+
         public Dictionary<EntityPrototype, PrecognitionResultComponent> AllPrecognitionResults()
         {
             var allEvents = new Dictionary<EntityPrototype, PrecognitionResultComponent>();

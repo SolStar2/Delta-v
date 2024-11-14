@@ -10,6 +10,8 @@ using Content.Shared.DoAfter;
 using Content.Shared.Psionics.Events;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
+using Robust.Shared.Random;
+using Content.Server.StationEvents.Components;
 
 namespace Content.Server.Abilities.Psionics
 {
@@ -20,6 +22,7 @@ namespace Content.Server.Abilities.Psionics
         [Dependency] private readonly SharedPsionicAbilitiesSystem _psionics = default!;
         [Dependency] private readonly DoAfterSystem _doAfterSystem = default!;
         [Dependency] private readonly MindSystem _mind = default!;
+        [Dependency] private readonly IRobustRandom _random = default!;
         [Dependency] private readonly IComponentFactory _factory = default!;
         [Dependency] private readonly IChatManager _chat = default!;
         [Dependency] private readonly IGameTiming _gameTiming = default!;
@@ -79,7 +82,7 @@ namespace Content.Server.Abilities.Psionics
         {
             var minDetectWindow = TimeSpan.FromSeconds(30); // Determines the window that will be looked at for events avoiding events that are too close or too far to be useful.
             var maxDetectWindow = TimeSpan.FromMinutes(5);
-            string message = string.Empty;
+            string? message = null;
 
             if (!_mind.TryGetMind(uid, out _, out var mindComponent) || mindComponent.Session == null)
                 return;
@@ -87,7 +90,13 @@ namespace Content.Server.Abilities.Psionics
             if (!TryFindEarliestNextEvent(minDetectWindow, maxDetectWindow, out var nextEvent)) // A special message given if there is no event within the time window
                 message = "psionic-power-precognition-no-event-result-message";
 
-            if (nextEvent != null && !TryGetResultMessage(nextEvent.NextEventId, out message) || message == string.Empty) // In this case failure to get result message means something has gone wrong
+            if (nextEvent != null)
+                message = GetResultMessage(nextEvent.NextEventId);
+
+            if (_random.Prob(component.RandomResultChance) || true)
+                message = GetRandomResult();
+
+            if (message == string.Empty || message == null)
                 return;
 
             // Send a message describing the vision they see
@@ -106,17 +115,38 @@ namespace Content.Server.Abilities.Psionics
         /// Sets "message" to the localized message of the precognitionResult that that matches "nextEventId">
         /// </summary>
         /// <returns>true if a corosponding precognitionResult was found false otherwise</returns>
-        private bool TryGetResultMessage(EntProtoId nextEventId, out string message)
+        private string GetResultMessage(EntProtoId nextEventId)
         {
             foreach(var (eventProto, precognitionResult) in AllPrecognitionResults())
                 if (eventProto.ID == nextEventId && precognitionResult != null)
                 {
-                    message = Loc.GetString(precognitionResult.Message);
-                    return true;
+                    return Loc.GetString(precognitionResult.Message);
                 }
-            message = string.Empty;
             Log.Warning("Prototype " + nextEventId + "does not have an associated precognitionResult!");
-            return false;
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// </summary>
+        /// <returns>The localized string of a weighted randomly chosen precognition result</returns>
+        public string? GetRandomResult()
+        {
+            var precognitionResults = AllPrecognitionResults();
+            var sumOfWeights = 0;
+            foreach (var precognitionResult in precognitionResults.Values)
+                sumOfWeights += (int)precognitionResult.Weight;
+
+            sumOfWeights = _random.Next(sumOfWeights);
+            foreach (var (proto, stationEvent) in precognitionResults)
+            {
+                sumOfWeights -= (int)stationEvent.Weight;
+
+                if (sumOfWeights <= 0)
+                    return Loc.GetString(proto.ID);
+            }
+
+            Log.Error("Result was not found after weighted pick process!");
+            return null;
         }
 
         /// <summary>
@@ -133,8 +163,6 @@ namespace Content.Server.Abilities.Psionics
             var query = EntityQueryEnumerator<NextEventComponent>();
             while (query.MoveNext(out var uid, out var nextEventComponent))
             {
-                if (!HasComp<PrecognitionResultComponent>(uid)) // ignore if there is no result associated
-                    continue;
                 // Update if the event is the most recent event that isnt too close or too far from happening to be of use
                 if (nextEventComponent.NextEventTime > GameTicker.RoundDuration() + minDetectWindow
                     && nextEventComponent.NextEventTime < GameTicker.RoundDuration() + maxDetectWindow

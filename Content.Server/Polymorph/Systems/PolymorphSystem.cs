@@ -2,7 +2,6 @@ using Content.Server.Actions;
 using Content.Server.Humanoid;
 using Content.Server.Inventory;
 using Content.Server.Mind.Commands;
-using Content.Shared.Nutrition;
 using Content.Server.Polymorph.Components;
 using Content.Shared._DV.Polymorph; // DeltaV
 using Content.Shared.Actions;
@@ -229,13 +228,8 @@ public sealed partial class PolymorphSystem : EntitySystem
             _container.Insert(child, cont);
 
         //Transfers all damage from the original to the new one
-        if (configuration.TransferDamage &&
-            TryComp<DamageableComponent>(child, out var damageParent) &&
-            _mobThreshold.GetScaledDamage(uid, child, out var damage) &&
-            damage != null)
+        if (configuration.TransferDamage)
         {
-            _damageable.SetDamage(child, damageParent, damage);
-
             // DeltaV - Transfer Stamina Damage
             var staminaDamage = _stamina.GetStaminaDamage(uid);
             _stamina.TakeStaminaDamage(child, staminaDamage);
@@ -269,9 +263,6 @@ public sealed partial class PolymorphSystem : EntitySystem
                 _hands.TryDrop(uid, held);
             }
         }
-
-        if (configuration.TransferName && TryComp(uid, out MetaDataComponent? targetMeta))
-            _metaData.SetEntityName(child, targetMeta.EntityName);
 
         if (configuration.TransferHumanoidAppearance)
         {
@@ -371,7 +362,7 @@ public sealed partial class PolymorphSystem : EntitySystem
         _transform.AttachToGridOrMap(parent, parentXform);
 
         // Raise an event to inform anything that wants to know about the entity swap
-        var ev = new PolymorphedEvent(uid, parent, true);
+        var ev = new PolymorphedEvent(uid, parent, true, component.Configuration);
         RaiseLocalEvent(uid, ref ev);
 
         // visual effect spawn
